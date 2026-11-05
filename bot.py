@@ -1,138 +1,288 @@
 
 import os
-import re
+import json
 import discord
+from discord.ext import commands
+from discord import app_commands
+
+# ==========================================
+# CONFIGURATION
+# ==========================================
 
 TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 
-REMINDER_CHANNEL_ID = 1553381648425287792
-MOD_CHANNEL_ID = 1556313791153705091
+DATA_FILE = "emoji_marks.json"
 
-# Mod names and related topics.
-MOD_TOPIC = re.compile(
-    r"\bmods?\b"
-    r"|frame[\s-]*counter"
-    r"|window[\s-]*mod"
-    r"|\bfps\b"
-    r"|razys?\s+(?:mod|frame|counter|window)",
-    re.IGNORECASE,
-)
+# Optional: Set this environment variable for instant
+# command syncing in your server during testing.
+GUILD_ID = os.getenv("DISCORD_GUILD_ID")
 
-# Strong indicators that someone wants to FIND or ACCESS something.
-REQUEST_PATTERNS = [
-    # Where/how questions
-    r"\bwhere\b.{0,80}\b(?:get|find|download|install|access|link|channel|posted|located)\b",
-    r"\bhow\b.{0,80}\b(?:get|find|download|install|access)\b",
-    r"\bwhere\s+is\s+(?:the\s+)?(?:download|link|mod|mods|mod\s+channel)\b",
-    r"\bwhat\s+channel\b.{0,80}\b(?:mod|download|link|it|that)\b",
-    r"\bwhich\s+channel\b.{0,80}\b(?:mod|download|link|it|that)\b",
 
-    # Asking for a link or download
-    r"\b(?:anyone|anybody|someone|somebody)\b.{0,60}\b(?:got|have|has|know\s+where)\b.{0,80}\b(?:mod|link|download|it|one)\b",
-    r"\b(?:any|a)\s+(?:download|link)\s+(?:for|to)\b",
-    r"\b(?:link|download)\s+(?:for|to)\b",
-    r"\b(?:send|give|drop|share)\s+(?:me\s+)?(?:the\s+)?(?:mod\s+)?(?:link|download)\b",
-    r"\bcan\s+(?:someone|anyone)\s+(?:send|give|drop|share|link)\b",
-
-    # Looking for something
-    r"\b(?:looking|searching)\s+for\b",
-    r"\b(?:can't|cannot|cant|unable\s+to)\s+find\b",
-    r"\b(?:need|want)\b.{0,50}\b(?:mod|link|download|install)\b",
-    r"\bdoes\s+(?:anyone|anybody|this\s+server)\s+have\b",
-    r"\bis\s+there\s+(?:a|any|an)\b",
-
-    # Direct instructions/questions about obtaining a mod
-    r"\bhow\s+to\s+(?:get|find|download|install)\b",
-    r"\bhow\s+(?:can|do)\s+i\s+(?:get|find|download|install)\b",
-    r"\b(?:get|find|download|install)\b.{0,80}\b(?:mod|mods|frame[\s-]*counter|window[\s-]*mod)\b",
-]
-
-# Reject obvious non-requests before checking request patterns.
-EXCLUSION_PATTERNS = [
-    r"\bget\s+(?:someone|somebody)\s+to\b",
-    r"\bfind\s+(?:someone|somebody)\s+to\b",
-    r"\b(?:moderator|moderators|moderation)\b",
-    r"\b(?:is|was|looks|sounds|feels)\s+(?:so\s+)?(?:good|great|awesome|cool|amazing|fire|goated)\b",
-    r"\b(?:w|goat)\s+for\s+this\b",
-    r"\b(?:cooked|goated|based)\b",
-    r"\bshould\s+(?:add|change|fix|make|remove)\b",
-    r"\b(?:already|just|finally)\s+(?:got|found|downloaded|installed)\b",
-]
+# ==========================================
+# INTENTS
+# ==========================================
 
 intents = discord.Intents.default()
 intents.message_content = True
 
-client = discord.Client(intents=intents)
+
+# ==========================================
+# DATA STORAGE
+# ==========================================
+
+def load_marks():
+    if os.path.exists(DATA_FILE):
+        try:
+            with open(DATA_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError) as error:
+            print(f"Failed to load marks: {error}")
+
+    return {}
 
 
-def is_excluded(text):
-    return any(
-        re.search(pattern, text, re.IGNORECASE)
-        for pattern in EXCLUSION_PATTERNS
-    )
+def save_marks():
+    temp_file = DATA_FILE + ".tmp"
+
+    with open(temp_file, "w", encoding="utf-8") as f:
+        json.dump(marks, f, indent=4)
+
+    os.replace(temp_file, DATA_FILE)
 
 
-def is_mod_request(text):
-    # Do not trigger on obvious chatter or compliments.
-    if is_excluded(text):
-        return False
-
-    # A request must match an actual request pattern.
-    if not any(
-        re.search(pattern, text, re.IGNORECASE)
-        for pattern in REQUEST_PATTERNS
-    ):
-        return False
-
-    # It must also be about a mod, a download, a link, or a channel.
-    return bool(MOD_TOPIC.search(text)) or bool(
-        re.search(
-            r"\b(?:download|installation|install|link|mod\s+channel)\b",
-            text,
-            re.IGNORECASE,
-        )
-    )
+marks = load_marks()
 
 
-@client.event
+# ==========================================
+# BOT CLASS
+# ==========================================
+
+class EmojiMarkBot(commands.Bot):
+
+    async def setup_hook(self):
+
+        if GUILD_ID:
+            guild = discord.Object(id=int(GUILD_ID))
+
+            self.tree.copy_global_to(guild=guild)
+            synced = await self.tree.sync(guild=guild)
+
+            print(f"Synced {len(synced)} commands to server.")
+
+        else:
+            synced = await self.tree.sync()
+
+            print(f"Synced {len(synced)} global commands.")
+
+        print("Slash commands are ready!")
+
+
+bot = EmojiMarkBot(
+    command_prefix="!",
+    intents=intents
+)
+
+
+# ==========================================
+# BOT READY
+# ==========================================
+
+@bot.event
 async def on_ready():
-    print(f"Bot is online as {client.user}")
-    print("Listening for mod requests.")
+    print(f"Bot is online as {bot.user}")
+    print(f"Loaded {len(marks)} emoji marks.")
+    print("Emoji Mark system is running!")
 
 
-@client.event
-async def on_message(message):
-    if message.author.bot or message.guild is None:
+# ==========================================
+# /EMOJIMARK
+# ==========================================
+
+@bot.tree.command(
+    name="emojimark",
+    description="Automatically react to a user's messages."
+)
+@app_commands.describe(
+    user="Choose the user to mark.",
+    emoji="Choose the emoji to react with."
+)
+async def emojimark(
+    interaction: discord.Interaction,
+    user: discord.Member,
+    emoji: str
+):
+
+    await interaction.response.defer(ephemeral=True)
+
+    if not interaction.guild:
+        await interaction.followup.send(
+            "This command only works in servers."
+        )
         return
 
-    if not is_mod_request(message.content):
+    emoji = emoji.strip()
+
+    if not emoji:
+        await interaction.followup.send(
+            "Please provide an emoji."
+        )
         return
 
-    reminder_channel = client.get_channel(REMINDER_CHANNEL_ID)
-    mod_channel = client.get_channel(MOD_CHANNEL_ID)
+    key = f"{interaction.guild.id}:{user.id}"
 
-    if reminder_channel is None or mod_channel is None:
-        print("A configured channel could not be found.")
-        return
+    marks[key] = {
+        "emoji": emoji,
+        "user": user.id,
+        "guild": interaction.guild.id
+    }
 
     try:
-        await reminder_channel.send(
-            f"**Mod reminder!** Link to the mod: {mod_channel.mention}"
+        save_marks()
+    except OSError as error:
+        print(f"Failed to save marks: {error}")
+
+        await interaction.followup.send(
+            "Failed to save the emoji mark. Please try again."
         )
-        print(f"Reminder sent for message by {message.author}.")
+        return
 
-    except discord.Forbidden:
-        print("Missing permission to send messages in the reminder channel.")
+    await interaction.followup.send(
+        f"Successfully marked {user.mention} with {emoji}!\n"
+        "I'll automatically react to their messages."
+    )
 
-    except discord.HTTPException as error:
-        print(f"Failed to send reminder: {error}")
+    print(
+        f"{interaction.user} marked {user} with {emoji}"
+    )
 
+
+# ==========================================
+# /UNEMOJIMARK
+# ==========================================
+
+@bot.tree.command(
+    name="unemojimark",
+    description="Remove automatic reactions from a user."
+)
+@app_commands.describe(
+    user="Choose the user to unmark."
+)
+async def unemojimark(
+    interaction: discord.Interaction,
+    user: discord.Member
+):
+
+    await interaction.response.defer(ephemeral=True)
+
+    if not interaction.guild:
+        await interaction.followup.send(
+            "This command only works in servers."
+        )
+        return
+
+    key = f"{interaction.guild.id}:{user.id}"
+
+    if key not in marks:
+        await interaction.followup.send(
+            f"{user.mention} isn't marked."
+        )
+        return
+
+    del marks[key]
+
+    try:
+        save_marks()
+    except OSError as error:
+        print(f"Failed to save marks: {error}")
+
+        await interaction.followup.send(
+            "Failed to save changes. Please try again."
+        )
+        return
+
+    await interaction.followup.send(
+        f"Successfully unmarked {user.mention}!"
+    )
+
+    print(f"{interaction.user} unmarked {user}")
+
+
+# ==========================================
+# AUTOMATIC REACTIONS
+# ==========================================
+
+@bot.event
+async def on_message(message):
+
+    if message.author.bot:
+        return
+
+    if message.guild is None:
+        return
+
+    key = f"{message.guild.id}:{message.author.id}"
+
+    if key in marks:
+
+        emoji = marks[key]["emoji"]
+
+        try:
+            await message.add_reaction(emoji)
+
+            print(
+                f"Reacted to {message.author}'s message with {emoji}"
+            )
+
+        except discord.Forbidden:
+            print(
+                f"Missing permission to react in {message.channel}"
+            )
+
+        except discord.HTTPException as error:
+            print(f"Reaction failed: {error}")
+
+    await bot.process_commands(message)
+
+
+# ==========================================
+# ERROR HANDLING
+# ==========================================
+
+@bot.tree.error
+async def on_app_command_error(
+    interaction: discord.Interaction,
+    error: app_commands.AppCommandError
+):
+
+    print(f"Command error: {error}")
+
+    message = f"Something went wrong: {error}"
+
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(
+                message,
+                ephemeral=True
+            )
+        else:
+            await interaction.response.send_message(
+                message,
+                ephemeral=True
+            )
+
+    except discord.HTTPException:
+        pass
+
+
+# ==========================================
+# START BOT
+# ==========================================
 
 if __name__ == "__main__":
+
     if not TOKEN:
         raise RuntimeError(
-            "DISCORD_BOT_TOKEN is missing. "
-            "Configure it in your hosting environment variables."
+            "DISCORD_BOT_TOKEN is missing from environment variables!"
         )
 
-    client.run(TOKEN)
+    bot.run(TOKEN)
